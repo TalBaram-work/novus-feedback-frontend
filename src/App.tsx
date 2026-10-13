@@ -1,4 +1,11 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUp,
   Lightbulb,
@@ -30,6 +37,11 @@ const filters: Array<{ value: FeedbackStatus | "all"; label: string }> = [
   { value: "planned", label: "Planned" },
   { value: "shipped", label: "Shipped" },
 ];
+
+// Error text for failure events, capped to stay within Pendo's property limits.
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message.slice(0, 100) : "unknown";
+}
 
 export default function App() {
   const [visitors, setVisitors] = useState<Visitor[]>([]);
@@ -74,8 +86,24 @@ export default function App() {
     (visitor) => visitor.id === selectedVisitorId,
   );
 
+  const identifiedVisitorRef = useRef<Visitor | null>(null);
+
   useEffect(() => {
-    if (selectedVisitor) identifyVisitor(selectedVisitor);
+    if (!selectedVisitor) return;
+    identifyVisitor(selectedVisitor);
+    // Tracked after identify so the switch is attributed to the new visitor
+    // and account (the Pendo agent attaches their ids). Comparing ids skips the
+    // initial default selection, Retry reloads and StrictMode effect re-runs.
+    const previousVisitor = identifiedVisitorRef.current;
+    identifiedVisitorRef.current = selectedVisitor;
+    if (previousVisitor && previousVisitor.id !== selectedVisitor.id) {
+      track("visitor_switched", {
+        previousVisitorId: previousVisitor.id,
+        previousAccountId: previousVisitor.accountId,
+        previousPlan: previousVisitor.plan,
+        plan: selectedVisitor.plan,
+      });
+    }
   }, [selectedVisitor]);
 
   const visibleFeedback = useMemo(
@@ -84,6 +112,20 @@ export default function App() {
   );
 
   const totalVotes = feedback.reduce((sum, item) => sum + item.votes, 0);
+
+  function handleFilterChange(nextFilter: FeedbackStatus | "all") {
+    setFilter(nextFilter);
+    // Re-clicking the already-active filter is not a change.
+    if (nextFilter === filter) return;
+    track("feedback_filter_changed", {
+      filter: nextFilter,
+      previousFilter: filter,
+      // Ideas in the chosen stage; 0 means the empty state is shown.
+      resultsCount: feedback.filter(
+        (item) => nextFilter === "all" || item.status === nextFilter,
+      ).length,
+    });
+  }
 
   async function handleVote(item: FeedbackItem) {
     if (!selectedVisitor) return;
@@ -101,6 +143,10 @@ export default function App() {
         feedbackId: item.id,
         category: item.category,
         voted,
+        status: item.status,
+        // Authoritative tally from the backend, even if voterIds were stale.
+        voteCount: updated.votes,
+        isOwnIdea: item.authorId === selectedVisitor.id,
       });
     } catch (voteError: unknown) {
       setError(
@@ -108,6 +154,13 @@ export default function App() {
           ? voteError.message
           : "Could not update vote",
       );
+      track("feedback_vote_failed", {
+        feedbackId: item.id,
+        category: item.category,
+        status: item.status,
+        voted,
+        errorMessage: errorMessageOf(voteError),
+      });
     } finally {
       setPendingVotes((current) => {
         const next = new Set(current);
@@ -122,6 +175,9 @@ export default function App() {
     if (!selectedVisitor) return;
     setSubmitting(true);
     setError("");
+    // Trimmed lengths (never the free text), matching the API's validation.
+    const titleLength = title.trim().length;
+    const descriptionLength = description.trim().length;
     try {
       const created = await createFeedback({
         visitorId: selectedVisitor.id,
@@ -134,13 +190,24 @@ export default function App() {
       setDescription("");
       setCategory("platform");
       setFilter("all");
-      track("feedback_submitted", { feedbackId: created.id, category });
+      track("feedback_submitted", {
+        feedbackId: created.id,
+        category,
+        titleLength,
+        descriptionLength,
+      });
     } catch (submitError: unknown) {
       setError(
         submitError instanceof Error
           ? submitError.message
           : "Could not submit feedback",
       );
+      track("feedback_submission_failed", {
+        category,
+        titleLength,
+        descriptionLength,
+        errorMessage: errorMessageOf(submitError),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -242,12 +309,7 @@ export default function App() {
                     key={option.value}
                     className={filter === option.value ? "active" : ""}
                     aria-pressed={filter === option.value}
-                    onClick={() => {
-                      setFilter(option.value);
-                      track("feedback_filter_changed", {
-                        filter: option.value,
-                      });
-                    }}
+                    onClick={() => handleFilterChange(option.value)}
                   >
                     {option.label}
                   </button>

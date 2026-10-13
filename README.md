@@ -30,8 +30,11 @@ Set `VITE_PENDO_API_KEY` and optionally `VITE_PENDO_CDN_HOST` before starting or
 The selected seeded visitor is sent to Pendo with account, plan, and role metadata. The app emits:
 
 - `feedback_vote_toggled`
+- `feedback_vote_failed`
 - `feedback_submitted`
+- `feedback_submission_failed`
 - `feedback_filter_changed`
+- `visitor_switched`
 
 Connect this repository and the backend repository to the same Novus app to exercise multi-repo
 code context.
