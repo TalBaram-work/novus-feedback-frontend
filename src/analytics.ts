@@ -46,7 +46,7 @@ function metadata(visitor: Visitor) {
 }
 
 export function identifyVisitor(visitor: Visitor): void {
-  const apiKey = import.meta.env.VITE_PENDO_API_KEY;
+  const apiKey = "583e4201-1c58-4f3f-8a6e-87397a8a2818";
   if (!apiKey) return;
   latestVisitor = visitor;
 
